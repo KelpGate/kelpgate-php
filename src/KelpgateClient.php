@@ -34,7 +34,7 @@ use Kelpgate\Http\Upload;
  */
 final class KelpgateClient
 {
-    public const VERSION = '0.1.0';
+    public const VERSION = '0.2.0';
 
     private const DEFAULT_MAX_BYTES = 134217728; // 128 MiB, a little above the largest plan limit
     private const REFRESH_AHEAD = 120;           // renew a token this many seconds before it expires

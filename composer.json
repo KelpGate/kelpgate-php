@@ -4,7 +4,7 @@
   "type": "library",
   "keywords": ["kelpgate", "malware", "antivirus", "virus-scan", "clamav", "yara", "upload", "laravel", "wordpress"],
   "homepage": "https://kelpgate.cloud",
-  "license": "GPL-2.0-or-later",
+  "license": "MIT",
   "authors": [
     { "name": "JustBots Labs", "homepage": "https://kelpgate.cloud" }
   ],
