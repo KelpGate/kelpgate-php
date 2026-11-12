@@ -21,6 +21,10 @@ final class CurlTransport implements Transport
 
     public function send(Request $request): Response
     {
+        if ($request->url === '' || $request->method === '') {
+            throw new NetworkException('The request has no URL or method');
+        }
+
         $ch = curl_init();
         if ($ch === false) {
             throw new NetworkException('Could not start a cURL handle');

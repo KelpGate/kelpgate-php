@@ -122,6 +122,12 @@ final class CurlTransportTest extends TestCase
         (new CurlTransport())->send(new Request('GET', self::$base . '/slow', [], null, null, [], 0.3));
     }
 
+    public function testARequestWithoutAUrlIsRejected(): void
+    {
+        $this->expectException(NetworkException::class);
+        (new CurlTransport())->send(new Request('GET', ''));
+    }
+
     public function testAnUnreachableHostIsANetworkException(): void
     {
         $this->expectException(NetworkException::class);
