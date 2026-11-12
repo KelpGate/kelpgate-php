@@ -21,8 +21,8 @@
     "ext-curl": "Needed by the default transport. Without it, pass your own Kelpgate\\Http\\Transport."
   },
   "require-dev": {
+    "phpstan/phpstan": "^2.2",
     "phpunit/phpunit": "^9.6",
-    "phpstan/phpstan": "^1.12",
     "squizlabs/php_codesniffer": "^3.10 || ^4.0"
   },
   "autoload": {
