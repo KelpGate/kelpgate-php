@@ -25,7 +25,13 @@ use PHPUnit\Framework\TestCase;
 
 final class KelpgateClientTest extends TestCase
 {
-    private const CLEAN = ['av-status' => 'CLEAN', 'av-signature' => 'OK', 'sha256' => 'abc', 'scan_id' => 's1', 'rule_authors' => ['ESET']];
+    private const CLEAN = [
+        'av-status' => 'CLEAN',
+        'av-signature' => 'OK',
+        'sha256' => 'abc',
+        'scan_id' => 's1',
+        'rule_authors' => ['ESET'],
+    ];
     private const INFECTED = ['av-status' => 'INFECTED', 'av-signature' => 'Eicar-Test-Signature'];
 
     /** @var FakeTransport */
@@ -305,7 +311,8 @@ final class KelpgateClientTest extends TestCase
         $this->http->token()->json(202, ['scan_id' => 'sc-2']);
         $accepted = $this->client()->scanUrlAsync('https://example.com/f', ['webhookUrl' => 'https://example.com/hook']);
         $this->assertSame('sc-2', $accepted->scanId);
-        $this->assertSame('{"url":"https:\/\/example.com\/f","webhook_url":"https:\/\/example.com\/hook"}', str_replace('/', '\/', (string) $this->http->requests[1]->body));
+        $body = json_decode((string) $this->http->requests[1]->body, true);
+        $this->assertSame(['url' => 'https://example.com/f', 'webhook_url' => 'https://example.com/hook'], $body);
     }
 
     public function testGetAsyncResultReturnsPendingThenAResult(): void
@@ -385,7 +392,12 @@ final class KelpgateClientTest extends TestCase
 
     public function testQuotaDetailsAreExposed(): void
     {
-        $this->http->token()->json(402, ['error' => 'quota', 'quota' => 100, 'usage' => 100, 'upgrade_url' => 'https://kelpgate.cloud/plans']);
+        $this->http->token()->json(402, [
+            'error' => 'quota',
+            'quota' => 100,
+            'usage' => 100,
+            'upgrade_url' => 'https://kelpgate.cloud/plans',
+        ]);
         try {
             $this->client()->scanBytes('x');
             $this->fail('expected a QuotaExceededException');

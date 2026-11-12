@@ -151,7 +151,12 @@ final class KelpgateClient
             'apiUrl' => $get('KELPGATE_API_URL') ?: 'https://api.kelpgate.cloud',
             'tokenUrl' => $get('KELPGATE_TOKEN_URL') ?: 'https://auth.kelpgate.cloud/oauth2/token',
         ];
-        foreach (['clientId' => 'KELPGATE_CLIENT_ID', 'clientSecret' => 'KELPGATE_CLIENT_SECRET', 'bearerToken' => 'KELPGATE_TOKEN'] as $option => $name) {
+        $credentials = [
+            'clientId' => 'KELPGATE_CLIENT_ID',
+            'clientSecret' => 'KELPGATE_CLIENT_SECRET',
+            'bearerToken' => 'KELPGATE_TOKEN',
+        ];
+        foreach ($credentials as $option => $name) {
             if ($get($name) !== '') {
                 $options[$option] = $get($name);
             }
@@ -380,7 +385,13 @@ final class KelpgateClient
     /**
      * Sends a request with auth, one token retry on 401, and bounded retries on transient failures.
      *
-     * @param array{body?: string|null, headers?: array<string, string>, auth?: bool, upload?: Upload, fields?: array<string, string>} $options
+     * @param array{
+     *     body?: string|null,
+     *     headers?: array<string, string>,
+     *     auth?: bool,
+     *     upload?: Upload,
+     *     fields?: array<string, string>
+     * } $options
      *
      * @return array{status: int, data: array<string, mixed>, requestId: string|null, response: Response}
      */
