@@ -1,0 +1,53 @@
+name: Release
+
+# Push a tag such as v0.1.0 to publish a GitHub Release. Packagist picks the tag up through its GitHub
+# hook, so there is no registry upload step here.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify the tag, changelog and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.3'
+          extensions: curl, json
+          coverage: none
+      - name: The tag must match the client version
+        run: |
+          set -euo pipefail
+          version="$(sed -n "s/.*const VERSION = '\([0-9][^']*\)'.*/\1/p" src/KelpgateClient.php | head -1)"
+          test "v$version" = "${GITHUB_REF_NAME}" || { echo "::error::tag $GITHUB_REF_NAME does not match KelpgateClient::VERSION (v$version)"; exit 1; }
+      - name: The changelog must have an entry for this version
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '$0 == "## " v {found=1; next} /^## / {if (found) exit} found' CHANGELOG.md > release-notes.md
+          test -s release-notes.md || { echo "::error::CHANGELOG.md has no entry for $version"; exit 1; }
+      - run: composer install --no-interaction --no-progress --prefer-dist
+      - run: composer validate --strict
+      - run: vendor/bin/phpunit
+
+  github-release:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub Release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Create the GitHub Release from the changelog entry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '$0 == "## " v {found=1; next} /^## / {if (found) exit} found' CHANGELOG.md > release-notes.md
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "kelpgate/kelpgate-php $GITHUB_REF_NAME" \
+            --notes-file release-notes.md
