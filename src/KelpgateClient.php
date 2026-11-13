@@ -34,7 +34,7 @@ use Kelpgate\Http\Upload;
  */
 final class KelpgateClient
 {
-    public const VERSION = '0.2.0';
+    public const VERSION = '0.3.0';
 
     private const DEFAULT_MAX_BYTES = 134217728; // 128 MiB, a little above the largest plan limit
     private const REFRESH_AHEAD = 120;           // renew a token this many seconds before it expires
@@ -177,7 +177,9 @@ final class KelpgateClient
      * Scans a file on disk, or a readable stream.
      *
      * @param string|resource|BytesSource $source A file path, or a stream resource.
-     * @param array{filename?: string}    $options
+     * @param array{filename?: string, idempotencyKey?: string} $options `idempotencyKey` makes retries safe:
+     *     the service counts a request repeated under the same key only once. By default a random key is
+     *     used for each call and reused by the client's own retries.
      *
      * @throws KelpgateException
      */
@@ -189,7 +191,7 @@ final class KelpgateClient
     /**
      * Scans bytes you already have in memory.
      *
-     * @param array{filename?: string} $options
+     * @param array{filename?: string, idempotencyKey?: string} $options
      *
      * @throws KelpgateException
      */
@@ -201,13 +203,18 @@ final class KelpgateClient
     /**
      * Asks the service to fetch and scan a remote file.
      *
+     * @param array{idempotencyKey?: string} $options
+     *
      * @throws KelpgateException
      */
-    public function scanUrl(string $url): ScanResult
+    public function scanUrl(string $url, array $options = []): ScanResult
     {
         $r = $this->request('POST', '/api/v1/scan/url', [
             'body' => $this->json(['url' => $url]),
-            'headers' => ['content-type' => 'application/json'],
+            'headers' => [
+                'content-type' => 'application/json',
+                'idempotency-key' => $this->idempotencyKey($options),
+            ],
         ]);
 
         return $this->scanResult($r);
@@ -217,7 +224,8 @@ final class KelpgateClient
      * Starts an asynchronous scan of a file.
      *
      * @param string|resource                           $source
-     * @param array{filename?: string, webhookUrl?: string} $options `webhookUrl` is called when the scan finishes.
+     * @param array{filename?: string, webhookUrl?: string, idempotencyKey?: string} $options
+     *     `webhookUrl` is called when the scan finishes.
      *
      * @throws KelpgateException
      */
@@ -231,7 +239,7 @@ final class KelpgateClient
     /**
      * Starts an asynchronous scan of a remote file.
      *
-     * @param array{webhookUrl?: string} $options
+     * @param array{webhookUrl?: string, idempotencyKey?: string} $options
      *
      * @throws KelpgateException
      */
@@ -244,7 +252,10 @@ final class KelpgateClient
 
         return $this->accepted($this->request('POST', '/api/v1/async-scan/url', [
             'body' => $this->json($payload),
-            'headers' => ['content-type' => 'application/json'],
+            'headers' => [
+                'content-type' => 'application/json',
+                'idempotency-key' => $this->idempotencyKey($options),
+            ],
         ]));
     }
 
@@ -507,14 +518,52 @@ final class KelpgateClient
      */
     private function upload(string $path, $source, array $options = [], array $fields = []): array
     {
+        $key = $this->idempotencyKey($options);
         $upload = $this->toUpload($source, isset($options['filename']) ? (string) $options['filename'] : null);
         try {
-            return $this->request('POST', $path, ['upload' => $upload, 'fields' => $fields]);
+            return $this->request('POST', $path, [
+                'upload' => $upload,
+                'fields' => $fields,
+                'headers' => ['idempotency-key' => $key],
+            ]);
         } finally {
             if ($upload->temporary) {
                 @unlink($upload->path);
             }
         }
+    }
+
+    /**
+     * The Idempotency-Key for one scan call. The service counts a request repeated under the same key
+     * only once, so the key is made once per call and reused by every retry of that call. A key you pass
+     * is used as given; without one, a random UUID is used.
+     *
+     * @param array<string, mixed> $options
+     *
+     * @throws ConfigException
+     */
+    private function idempotencyKey(array $options): string
+    {
+        if (!isset($options['idempotencyKey'])) {
+            return self::uuid4();
+        }
+        $key = $options['idempotencyKey'];
+        if (!is_string($key) || preg_match('/\A[A-Za-z0-9._:-]{1,128}\z/', $key) !== 1) {
+            throw new ConfigException('idempotencyKey must be 1 to 128 characters from A-Z a-z 0-9 . _ : -');
+        }
+
+        return $key;
+    }
+
+    private static function uuid4(): string
+    {
+        $bytes = random_bytes(16);
+        $bytes[6] = chr((ord($bytes[6]) & 0x0f) | 0x40);
+        $bytes[8] = chr((ord($bytes[8]) & 0x3f) | 0x80);
+        $hex = bin2hex($bytes);
+
+        return substr($hex, 0, 8) . '-' . substr($hex, 8, 4) . '-' . substr($hex, 12, 4) . '-'
+            . substr($hex, 16, 4) . '-' . substr($hex, 20, 12);
     }
 
     /**
