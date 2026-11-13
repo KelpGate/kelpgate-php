@@ -491,4 +491,93 @@ final class KelpgateClientTest extends TestCase
             $this->assertStringContainsString('Bad gateway', $e->getMessage());
         }
     }
+    // ---- Idempotency-Key
+
+    private const UUID4 = '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/';
+
+    public function testEveryScanSendsAKeyAndRetriesReuseIt(): void
+    {
+        $this->http->token()->json(503, [])->json(502, [])->json(200, self::CLEAN);
+        $this->client()->scanBytes('x');
+        $sent = $this->http->apiRequests();
+        $this->assertCount(3, $sent);
+        $this->assertMatchesRegularExpression(self::UUID4, $sent[0]->headers['idempotency-key']);
+        $this->assertSame($sent[0]->headers['idempotency-key'], $sent[1]->headers['idempotency-key']);
+        $this->assertSame($sent[0]->headers['idempotency-key'], $sent[2]->headers['idempotency-key']);
+    }
+
+    public function testSeparateCallsGetSeparateKeys(): void
+    {
+        $this->http->token()->json(200, self::CLEAN)->json(200, self::CLEAN);
+        $client = $this->client();
+        $client->scanBytes('one');
+        $client->scanBytes('two');
+        $sent = $this->http->apiRequests();
+        $this->assertNotSame($sent[0]->headers['idempotency-key'], $sent[1]->headers['idempotency-key']);
+    }
+
+    public function testTheRetryAfterA401ReusesTheSameKey(): void
+    {
+        $this->http->token('t1')->json(401, ['error' => 'expired'])->token('t2')->json(200, self::CLEAN);
+        $this->client()->scanBytes('x');
+        $sent = $this->http->apiRequests();
+        $this->assertCount(2, $sent);
+        $this->assertSame($sent[0]->headers['idempotency-key'], $sent[1]->headers['idempotency-key']);
+    }
+
+    public function testAKeyYouPassIsSentAsGivenOnEveryScanOperation(): void
+    {
+        $key = 'job-42:upload.1';
+        $this->http->token()
+            ->json(200, self::CLEAN)->json(200, self::CLEAN)->json(200, self::CLEAN)
+            ->json(202, ['scan_id' => 'a1'])->json(202, ['scan_id' => 'a2']);
+        $client = $this->client();
+        $client->scanFile($this->tempFile(), ['idempotencyKey' => $key]);
+        $client->scanBytes('x', ['idempotencyKey' => $key]);
+        $client->scanUrl('https://example.com/f.bin', ['idempotencyKey' => $key]);
+        $client->scanFileAsync($this->tempFile(), ['idempotencyKey' => $key]);
+        $client->scanUrlAsync('https://example.com/f.bin', ['idempotencyKey' => $key]);
+        $sent = $this->http->apiRequests();
+        $this->assertCount(5, $sent);
+        foreach ($sent as $request) {
+            $this->assertSame($key, $request->headers['idempotency-key'], $request->url);
+        }
+    }
+
+    public function testAnInvalidKeyIsAConfigExceptionBeforeAnyRequest(): void
+    {
+        $client = $this->client();
+        foreach (['', 'has space', 'a/b', str_repeat('x', 129), "ok\n", 123] as $bad) {
+            try {
+                $client->scanBytes('x', ['idempotencyKey' => $bad]);
+                $this->fail('expected a ConfigException for ' . var_export($bad, true));
+            } catch (ConfigException $e) {
+                $this->assertStringContainsString('idempotencyKey', $e->getMessage());
+            }
+            try {
+                $client->scanUrl('https://example.com/f.bin', ['idempotencyKey' => $bad]);
+                $this->fail('expected a ConfigException for ' . var_export($bad, true));
+            } catch (ConfigException $e) {
+                $this->assertStringContainsString('idempotencyKey', $e->getMessage());
+            }
+        }
+        $this->assertSame([], $this->http->requests, 'no request, not even the token request, was made');
+
+        $this->http->token()->json(200, self::CLEAN);
+        $result = $client->scanBytes('x', ['idempotencyKey' => str_repeat('x', 128)]); // the longest allowed key
+        $this->assertFalse($result->infected);
+    }
+
+    public function testCallsThatAreNotCountedDoNotSendAKey(): void
+    {
+        $this->http->json(200, ['status' => 'ok'])->token()->json(202, ['av-status' => 'PROCESSING', 'scan_id' => 's1']);
+        $client = $this->client();
+        $client->health();
+        $client->getAsyncResult('s1');
+        $sent = $this->http->apiRequests();
+        $this->assertCount(2, $sent);
+        foreach ($sent as $request) {
+            $this->assertArrayNotHasKey('idempotency-key', $request->headers, $request->url);
+        }
+    }
 }
