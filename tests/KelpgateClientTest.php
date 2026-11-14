@@ -73,10 +73,16 @@ final class KelpgateClientTest extends TestCase
 
     // ---- configuration
 
+    /** Builds a client; the configuration tests call this to see whether construction throws. */
+    private function makeClient(array $options): KelpgateClient
+    {
+        return new KelpgateClient($options);
+    }
+
     public function testRequiresHttpsExceptForLoopback(): void
     {
         $this->expectException(ConfigException::class);
-        new KelpgateClient(['apiUrl' => 'http://api.example.com', 'bearerToken' => 't']);
+        $this->makeClient(['apiUrl' => 'http://api.example.com', 'bearerToken' => 't']);
     }
 
     public function testAllowsPlainHttpOnLocalhost(): void
@@ -92,7 +98,7 @@ final class KelpgateClientTest extends TestCase
     public function testNeedsCredentialsOrToken(): void
     {
         $this->expectException(ConfigException::class);
-        new KelpgateClient(['apiUrl' => 'https://api.example.com', 'tokenUrl' => 'https://auth.example.com/t', 'transport' => $this->http]);
+        $this->makeClient(['apiUrl' => 'https://api.example.com', 'tokenUrl' => 'https://auth.example.com/t', 'transport' => $this->http]);
     }
 
     public function testCredentialsStayOutOfDumps(): void
