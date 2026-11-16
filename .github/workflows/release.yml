@@ -5,6 +5,7 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch: # started by auto-tag.yml with the tag as the ref
 
 permissions:
   contents: read
