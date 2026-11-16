@@ -1,5 +1,5 @@
 {
-  "name": "kelpgate/kelpgate-php",
+  "name": "kelpgate/client",
   "description": "Kelpgate Client for PHP: scan uploaded files and URLs for malware with the Kelpgate API.",
   "type": "library",
   "keywords": ["kelpgate", "malware", "antivirus", "virus-scan", "clamav", "yara", "upload", "laravel", "wordpress"],

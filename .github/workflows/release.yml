@@ -49,5 +49,5 @@ jobs:
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
           awk -v v="$version" '$0 == "## " v {found=1; next} /^## / {if (found) exit} found' CHANGELOG.md > release-notes.md
-          gh release create "$GITHUB_REF_NAME" --verify-tag --title "kelpgate/kelpgate-php $GITHUB_REF_NAME" \
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "kelpgate/client $GITHUB_REF_NAME" \
             --notes-file release-notes.md
