@@ -30,7 +30,7 @@ PHP client for the [Kelpgate](https://kelpgate.cloud) malware-scanning API. Scan
 ## Install
 
 ```bash
-composer require kelpgate/kelpgate-php
+composer require kelpgate/client
 ```
 
 You need an API client from the [Kelpgate console](https://console.kelpgate.cloud): a client ID and secret.
