@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.1
 
 - Fix `QuotaExceededException::getUsage()`, which always returned `null`: the service sends the number of scans used as `used`, and the client read `usage`. The client now reads `used`, and still reads `usage` if a response has that instead. The method name is unchanged.
 
