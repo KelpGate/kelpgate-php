@@ -22,7 +22,14 @@ class QuotaExceededException extends KelpgateException
         parent::__construct($message, ['code' => 'QUOTA_EXCEEDED'] + $details);
         $body = $this->body;
         $this->quota = isset($body['quota']) ? (int) $body['quota'] : null;
-        $this->usage = isset($body['usage']) ? (int) $body['usage'] : null;
+        // The service sends the count as `used`; `usage` is read as a fallback.
+        if (isset($body['used'])) {
+            $this->usage = (int) $body['used'];
+        } elseif (isset($body['usage'])) {
+            $this->usage = (int) $body['usage'];
+        } else {
+            $this->usage = null;
+        }
         $this->upgradeUrl = isset($body['upgrade_url']) ? (string) $body['upgrade_url'] : null;
     }
 
@@ -31,6 +38,7 @@ class QuotaExceededException extends KelpgateException
         return $this->quota;
     }
 
+    /** Scans used this month (the `used` field of the 402 response). */
     public function getUsage(): ?int
     {
         return $this->usage;

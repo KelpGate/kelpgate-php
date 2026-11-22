@@ -398,10 +398,12 @@ final class KelpgateClientTest extends TestCase
 
     public function testQuotaDetailsAreExposed(): void
     {
+        // The body the scanning service sends on 402.
         $this->http->token()->json(402, [
-            'error' => 'quota',
+            'status' => 'QUOTA_EXCEEDED',
+            'error' => 'Monthly scan quota of 100 scans exceeded (101 used).',
+            'used' => 101,
             'quota' => 100,
-            'usage' => 100,
             'upgrade_url' => 'https://kelpgate.cloud/plans',
         ]);
         try {
@@ -409,8 +411,19 @@ final class KelpgateClientTest extends TestCase
             $this->fail('expected a QuotaExceededException');
         } catch (QuotaExceededException $e) {
             $this->assertSame(100, $e->getQuota());
-            $this->assertSame(100, $e->getUsage());
+            $this->assertSame(101, $e->getUsage());
             $this->assertSame('https://kelpgate.cloud/plans', $e->getUpgradeUrl());
+        }
+    }
+
+    public function testQuotaUsageFallsBackToUsageField(): void
+    {
+        $this->http->token()->json(402, ['error' => 'quota', 'quota' => 100, 'usage' => 99]);
+        try {
+            $this->client()->scanBytes('x');
+            $this->fail('expected a QuotaExceededException');
+        } catch (QuotaExceededException $e) {
+            $this->assertSame(99, $e->getUsage());
         }
     }
 
