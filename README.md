@@ -1,227 +1,268 @@
 # Kelpgate Client for PHP
 
-**Check every upload for malware before your app stores it.**
+[![Release](https://img.shields.io/github/v/release/KelpGate/kelpgate-php)](https://github.com/KelpGate/kelpgate-php/releases)
+[![CI](https://github.com/KelpGate/kelpgate-php/actions/workflows/ci.yml/badge.svg)](https://github.com/KelpGate/kelpgate-php/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-PHP client for the [Kelpgate](https://kelpgate.cloud) malware-scanning API. Scan uploaded files or remote URLs, get a verdict, and keep infected files out of your app. It has no runtime dependencies beyond `ext-curl` and `ext-json`, and works in plain PHP, Laravel, Symfony, WordPress and Drupal.
+Official PHP client for the [Kelpgate](https://kelpgate.cloud) malware-scanning API. It scans files, streams, strings and URLs, manages OAuth 2.0 access tokens, retries transient failures idempotently and maps API responses to typed results and exceptions. It requires no Composer dependencies; the default transport uses `ext-curl` and streams uploads from disk. The HTTP transport and token cache are replaceable, so the client integrates with framework HTTP layers and caches, including Laravel, Symfony, WordPress and Drupal.
 
-> This package is open source under the MIT license. It is a client for the Kelpgate scanning service, a hosted commercial product that is not part of this package. You need a Kelpgate account to use it.
+The package is open source under the MIT licence. The Kelpgate scanning service is a commercial hosted product; using it requires a Kelpgate account.
 
 ## Contents
 
-[Why Kelpgate](#why-kelpgate) · [How it works](#how-it-works) · [Install](#install) · [Quick start](#quick-start) · [Scanning](#scanning) · [Errors](#errors) · [Options](#options) · [Failure policy](#failure-policy) · [Security and privacy](#security-and-privacy) · [Compatibility](#compatibility) · [Verify your setup](#verify-your-setup) · [Troubleshooting](#troubleshooting) · [Support and versioning](#support-and-versioning) · [Contributing and security](#contributing-and-security) · [License](#license)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Usage](#usage)
+- [Scan results](#scan-results)
+- [Exceptions](#exceptions)
+- [Retries and idempotency](#retries-and-idempotency)
+- [Token caching](#token-caching)
+- [Custom transport](#custom-transport)
+- [Failure policy](#failure-policy)
+- [Security](#security)
+- [Troubleshooting](#troubleshooting)
+- [Compatibility and versioning](#compatibility-and-versioning)
+- [Development](#development)
+- [Support](#support)
+- [Licence](#licence)
 
-## Why Kelpgate
+## Requirements
 
-| | |
-| --- | --- |
-| **One call per file** | Send a path, a stream, bytes or a URL and get a verdict back. An infected file is a normal result, not an exception. |
-| **Credentials handled for you** | The OAuth 2.0 access token is fetched, cached and renewed before it expires. Plug in a persistent cache to share one token across requests. |
-| **Predictable failure behavior** | Typed exceptions for quota, size, file type, rate limits and network problems. You choose what happens when the scanner cannot answer: block or allow. |
-| **Safe by default** | API and token URLs must use HTTPS, redirects are never followed, and secrets never appear in `var_dump` or errors. |
-| **No dependencies, any HTTP layer** | The default transport uses cURL and streams uploads from disk. Swap in your own transport to use WordPress's HTTP API or a PSR-18 client. |
-| **Same names everywhere** | The methods, errors and settings match the Node.js and Python clients, the WordPress plugin and the Drupal module. See the [client standard](https://github.com/KelpGate/.github/blob/main/docs/client-standard.md). |
+- PHP 7.4 or later with `ext-json`.
+- `ext-curl` for the default transport.
+- A Kelpgate API client (client ID and secret) created in the [Kelpgate Console](https://console.kelpgate.cloud).
 
-## How it works
+## Installation
 
-1. The client obtains an OAuth 2.0 access token with your client credentials. Tokens are cached and renewed shortly before they expire.
-2. The file is sent to the scanning API over HTTPS.
-3. The API answers with a verdict. A clean file and an infected file (HTTP 406) both come back as a `ScanResult` with `infected` set to `false` or `true`. Anything that stops a verdict, such as an exhausted quota or an unreachable service, is thrown as a typed exception. Your code decides what to do next.
-
-## Install
+The package is distributed from this repository; Packagist publication is pending. Register the repository with Composer, then require the package:
 
 ```bash
-composer require kelpgate/client
+composer config repositories.kelpgate vcs https://github.com/KelpGate/kelpgate-php
+composer require kelpgate/client:^0.3
 ```
 
-You need an API client from the [Kelpgate console](https://console.kelpgate.cloud): a client ID and secret.
-
-## Quick start
+## Configuration
 
 ```php
 use Kelpgate\KelpgateClient;
 
-$kelpgate = KelpgateClient::fromEnv();          // reads the KELPGATE_* variables below
-
-$result = $kelpgate->scanFile($_FILES['upload']['tmp_name'], ['filename' => $_FILES['upload']['name']]);
-
-if ($result->infected) {
-    http_response_code(422);
-    exit('Upload rejected: ' . $result->signature);
-}
-```
-
-Set these environment variables (the endpoints default to Kelpgate's production service):
-
-| Variable | Meaning |
-| --- | --- |
-| `KELPGATE_CLIENT_ID`, `KELPGATE_CLIENT_SECRET` | OAuth 2.0 client credentials |
-| `KELPGATE_TOKEN` | A static bearer token, instead of client credentials |
-| `KELPGATE_API_URL` | API base URL, default `https://api.kelpgate.cloud` |
-| `KELPGATE_TOKEN_URL` | Token endpoint, default `https://auth.kelpgate.cloud/oauth2/token` |
-
-To make an infected upload throw instead, use `assertClean()`:
-
-```php
-use Kelpgate\Exception\InfectedException;
-
-try {
-    $kelpgate->scanFile($path)->assertClean();
-} catch (InfectedException $e) {
-    // $e->getSignature() is the detection name
-}
-```
-
-## Scanning
-
-| Method | What it does |
-| --- | --- |
-| `scanFile($pathOrStream, ['filename' => ...])` | Scan a file on disk or a stream |
-| `scanBytes($bytes, ['filename' => ...])` | Same, for bytes in memory |
-| `scanUrl($url)` | Kelpgate fetches the URL and scans it |
-| `scanFileAsync($pathOrStream, ['webhookUrl' => ...])`, `scanUrlAsync($url, ['webhookUrl' => ...])` | Start an asynchronous scan and get an `AcceptedScan` with a `scanId` |
-| `getAsyncResult($scanId, ['kind' => 'file'\|'url'])` | A `PendingScan` until the verdict is ready, then a `ScanResult` |
-| `waitForResult($scanId, ['intervalMs' => 1000, 'timeout' => 120])` | Poll until the scan finishes, or throw a `TimeoutException` |
-| `health()` | Service status. Needs no credentials |
-
-A `ScanResult` has `infected`, `status`, `signature`, `sha256`, `ruleAuthors`, `scanId`, `requestId` and the full response in `raw`. Two flags are worth checking: `policyRejected` means the file was refused by a policy such as an encrypted archive, and `degraded` means an engine did not finish, so coverage was reduced.
-
-### Retries and your quota
-
-Every scan call sends an `Idempotency-Key`. The client makes a random one for each call and reuses it on its own retries, so a retry after a timeout or a 502, 503 or 504 is not counted against your quota twice. You do not have to do anything.
-
-Pass `idempotencyKey` to protect retries you make yourself, for example one key per upload job:
-
-```php
-$result = $kelpgate->scanFile($path, ['idempotencyKey' => 'job-' . $job->id]);
-```
-
-A key is 1 to 128 characters from `A-Za-z0-9._:-` (anything else throws `ConfigException`). The service ties a key to the file: the same key on a different file is counted as a new scan, so never reuse one key for different uploads.
-
-## Errors
-
-Every exception extends `Kelpgate\Exception\KelpgateException` and carries `getErrorCode()`, `getStatus()`, `getRequestId()` and `getBody()`.
-
-| Exception | When |
-| --- | --- |
-| `ConfigException` | Wrong options, before any request |
-| `AuthException` | Credentials rejected (401), not allowed (403), or no token |
-| `QuotaExceededException` | The plan's scan quota is used up (402); has `getQuota()`, `getUsage()`, `getUpgradeUrl()` |
-| `PayloadTooLargeException` | File over the plan limit (413) or the client's `maxBytes` |
-| `UnsupportedFileException` | File type not allowed, or an encrypted archive (415) |
-| `RateLimitedException` | Too many scans at once (429); has `getRetryAfterSeconds()` |
-| `ScanException` | The request was invalid (400) or the file could not be parsed (412) |
-| `ServerException` | The service failed (5xx) |
-| `NetworkException`, `TimeoutException` | The service could not be reached, or the request timed out |
-| `InfectedException` | Thrown by `assertClean()` |
-
-## Options
-
-```php
 $kelpgate = new KelpgateClient([
     'apiUrl' => 'https://api.kelpgate.cloud',
     'tokenUrl' => 'https://auth.kelpgate.cloud/oauth2/token',
-    'clientId' => '...',
-    'clientSecret' => '...',
-    'timeout' => 60,          // seconds per request
-    'maxRetries' => 2,        // retries on network errors, 429, 502, 503 and 504
-    'retryDelayMs' => 500,    // base delay, doubled on each retry
-    'maxBytes' => 134217728,  // largest file the client will send
+    'clientId' => getenv('KELPGATE_CLIENT_ID'),
+    'clientSecret' => getenv('KELPGATE_CLIENT_SECRET'),
 ]);
 ```
 
-| Option | Default | Meaning |
-| --- | --- | --- |
-| `apiUrl` | none | Base URL of the API. HTTPS only (plain HTTP for `localhost`) |
-| `tokenUrl`, `clientId`, `clientSecret` | none | OAuth 2.0 client credentials |
-| `bearerToken` | none | A static token, instead of client credentials |
-| `scope` | `scan` | OAuth 2.0 scope |
-| `timeout` | `60` | Seconds per request |
-| `maxRetries`, `retryDelayMs` | `2`, `500` | Retry policy; `Retry-After` is honored up to 30 seconds |
-| `maxBytes` | 128 MiB | Largest file the client will send |
-| `transport` | cURL | Your own `Kelpgate\Http\Transport`, for another HTTP layer |
-| `tokenCache` | in memory | Your own `Kelpgate\Auth\TokenCache`, to reuse one token across requests |
+| Option | Default | Description |
+|---|---|---|
+| `apiUrl` | required | Base URL of the Kelpgate API |
+| `tokenUrl` | required with client credentials | OAuth 2.0 token endpoint |
+| `clientId`, `clientSecret` | | Client credentials |
+| `bearerToken` | | Static access token, used instead of client credentials |
+| `scope` | `scan` | OAuth 2.0 scope requested |
+| `timeout` | `60` | Per-request timeout in seconds |
+| `maxRetries` | `2` | Retries for network errors and HTTP 429, 502, 503 and 504 |
+| `retryDelayMs` | `500` | Base delay for exponential backoff; `Retry-After` is honoured up to 30 seconds |
+| `maxBytes` | 128 MiB | Largest file the client sends; larger files fail before upload |
+| `transport` | cURL | Implementation of `Kelpgate\Http\Transport` |
+| `tokenCache` | in-memory | Implementation of `Kelpgate\Auth\TokenCache` |
 
-PHP normally starts fresh for each web request, so the default in-memory cache fetches a new token every time. For busy sites, pass a cache that persists (APCu, your framework's cache, a WordPress transient) by implementing the three-method `TokenCache` interface.
+`apiUrl` and `tokenUrl` must use HTTPS; plain HTTP is accepted only for `localhost`.
+
+`KelpgateClient::fromEnv()` creates a client from environment variables:
+
+| Variable | Default |
+|---|---|
+| `KELPGATE_CLIENT_ID`, `KELPGATE_CLIENT_SECRET` | |
+| `KELPGATE_TOKEN` | Static token, instead of client credentials |
+| `KELPGATE_API_URL` | `https://api.kelpgate.cloud` |
+| `KELPGATE_TOKEN_URL` | `https://auth.kelpgate.cloud/oauth2/token` |
+
+## Usage
+
+```php
+use Kelpgate\KelpgateClient;
+use Kelpgate\Exception\InfectedException;
+
+$kelpgate = KelpgateClient::fromEnv();
+
+$result = $kelpgate->scanFile($_FILES['upload']['tmp_name'], [
+    'filename' => $_FILES['upload']['name'],
+]);
+
+if ($result->infected) {
+    // reject the upload
+}
+
+// Alternatively, throw InfectedException for an infected file:
+try {
+    $kelpgate->scanFile($path)->assertClean();
+} catch (InfectedException $e) {
+    $signature = $e->getSignature();
+}
+```
+
+| Method | Description |
+|---|---|
+| `scanFile($pathOrStream, $options)` | Scan a file path or stream resource |
+| `scanBytes($bytes, $options)` | Scan in-memory content |
+| `scanUrl($url, $options)` | Have the service fetch and scan a URL |
+| `scanFileAsync($pathOrStream, $options)`, `scanUrlAsync($url, $options)` | Submit a background scan; returns `AcceptedScan` with `scanId`. Accepts `webhookUrl`. |
+| `getAsyncResult($scanId, ['kind' => 'file'\|'url'])` | Returns `PendingScan` until the result is available, then `ScanResult` |
+| `waitForResult($scanId, ['intervalMs' => 1000, 'timeout' => 120])` | Poll until the result is available; throws `TimeoutException` on expiry |
+| `health()` | Service readiness; requires no credentials |
+
+Upload methods accept `filename` and `idempotencyKey`.
+
+## Scan results
+
+An infected file is a result, not an exception. `ScanResult` exposes:
+
+| Property | Type | Description |
+|---|---|---|
+| `infected` | `bool` | `true` for malware or a policy rejection |
+| `status` | `string` | `CLEAN` or `INFECTED` |
+| `signature` | `string` | Detection names, joined with ` \| ` |
+| `policyRejected` | `bool` | Rejected by policy (for example an encrypted archive) rather than detected |
+| `degraded` | `bool` | An engine did not complete; coverage was reduced |
+| `sha256` | `?string` | SHA-256 of the scanned content |
+| `ruleAuthors` | `string[]` | Authors of matching detection rules. Preserve them when displaying or forwarding a detection, as required by the Detection Rule License. |
+| `scanId`, `requestId` | `?string` | Identifiers; quote `requestId` in support requests |
+| `filename`, `timestamp`, `s3Path`, `downloadUrl` | `?string` | As returned by the service |
+| `raw` | `array` | Response body as received |
+
+Integrations that require full coverage should treat `degraded` as not verified.
+
+## Exceptions
+
+All exceptions extend `Kelpgate\Exception\KelpgateException` and expose `getStatus()`, `getErrorCode()`, `getRequestId()` and `getBody()`.
+
+| Exception | Condition |
+|---|---|
+| `ConfigException` | Invalid options or idempotency key; thrown before any request |
+| `AuthException` | Credentials rejected (401), organization or client not permitted (403), or no token available |
+| `QuotaExceededException` | Monthly quota exhausted (402). Exposes `getQuota()` and `getUpgradeUrl()`. |
+| `PayloadTooLargeException` | File over the plan or scanner limit (413), or over `maxBytes` |
+| `UnsupportedFileException` | File type not permitted, or archive rejected by policy (415) |
+| `RateLimitedException` | Concurrency limit reached (429). Exposes `getRetryAfterSeconds()`. |
+| `ScanException` | Invalid request (400), or content that could not be parsed (412) |
+| `ServerException` | HTTP 5xx after retries |
+| `NetworkException`, `TimeoutException` | The service could not be reached or did not respond in time |
+| `InfectedException` | Thrown by `assertClean()`; exposes `getResult()` and `getSignature()` |
+| `KelpgateException` | Any other status, including 404 and 422 |
+
+## Retries and idempotency
+
+Every scan request carries an `Idempotency-Key`. The client generates one per call and reuses it for its own retries, so a retried scan is not counted twice against the quota. A rejected access token is discarded and the request retried once with a new token.
+
+Supply a key to make retries across requests or job re-runs idempotent:
+
+```php
+$kelpgate->scanFile($path, ['idempotencyKey' => 'upload-' . $job->id]);
+```
+
+Keys are 1 to 128 characters from `A-Z a-z 0-9 . _ : -`. The service binds a key to the request content; reusing a key for a different file is counted as a new scan.
+
+## Token caching
+
+PHP processes typically serve one request, so the default in-memory cache requests a new access token for every request. Production deployments should supply a persistent cache by implementing `Kelpgate\Auth\TokenCache`:
+
+```php
+interface TokenCache
+{
+    public function get(string $key): ?array;
+    public function set(string $key, string $token, int $expiresAt): void;
+    public function delete(string $key): void;
+}
+```
+
+Back it with APCu, Redis, the framework cache or WordPress transients, and pass it as `tokenCache`.
+
+## Custom transport
+
+`Kelpgate\Http\Transport` abstracts HTTP. Implement it to route requests through a framework HTTP client, a PSR-18 client or the WordPress HTTP API, and pass the implementation as `transport`. The bundled `CurlTransport` streams uploads from disk and does not follow redirects.
 
 ## Failure policy
 
-When the scanner cannot give a verdict, the client throws a typed exception. What your application does with it is your choice:
+When the service cannot return a verdict, the client throws. The application decides whether to block or accept the upload:
 
-| Situation | Exception | Block (safer) | Allow (stays available) |
-| --- | --- | --- | --- |
-| Scanner unreachable, timed out or 5xx after retries | `NetworkException`, `TimeoutException`, `ServerException` | Reject the upload, show "try again" | Accept the upload unscanned |
-| Authentication fails | `AuthException` | Reject, and alert your team | Accept |
-| Plan quota used up | `QuotaExceededException` | Reject | Accept |
-| File over the plan limit or `maxBytes` | `PayloadTooLargeException` | Reject | Accept |
-| File type not allowed | `UnsupportedFileException` | Reject | Reject: this is a policy decision |
+| Condition | Exception | Block | Allow |
+|---|---|---|---|
+| Service unreachable, timed out, or 5xx after retries | `NetworkException`, `TimeoutException`, `ServerException` | Reject; ask the user to retry | Accept unscanned |
+| Authentication failed | `AuthException` | Reject and alert operations | Accept unscanned |
+| Quota exhausted | `QuotaExceededException` | Reject | Accept unscanned |
+| File too large | `PayloadTooLargeException` | Reject | Accept unscanned |
+| File type not permitted | `UnsupportedFileException` | Reject | Reject (policy decision) |
 
 ```php
 try {
     $result = $kelpgate->scanFile($path);
 } catch (\Kelpgate\Exception\KelpgateException $e) {
-    error_log('Kelpgate: ' . $e->getErrorCode() . ' ' . $e->getMessage());
-    // block: refuse the upload. allow: carry on.
+    error_log(sprintf('Kelpgate %s: %s', $e->getErrorCode(), $e->getMessage()));
+    // apply the chosen policy
 }
 ```
 
-Choose block where stopping malware matters more than availability, and allow where uploads must keep working during an outage.
+Use block where preventing malware takes priority over availability, and allow where uploads must continue during a service outage.
 
-## Security and privacy
+## Security
 
-- **What leaves your server:** the uploaded file and its file name, sent over HTTPS to the API URL you configure. Nothing else about your application is sent.
-- **Transport:** API and token endpoints must use HTTPS (plain HTTP is accepted only for `localhost`). Redirects are never followed.
-- **Secrets:** the client secret never appears in `var_dump`, `print_r` or error messages. Keep it in an environment variable or a secrets manager, not in source control.
-- **Token handling:** access tokens are kept in the cache you provide, in memory by default. A rejected token is discarded and retried once.
-- **Temporary files:** streams and byte strings are written to a temporary file for the upload and deleted afterwards. Files on disk are read in place.
-- **Data kept by the service:** files that scan clean are kept briefly and infected files are quarantined, according to your Kelpgate plan. That is the service's behavior, not this package's.
+| Aspect | Behaviour |
+|---|---|
+| Data sent | The file content and its name, over HTTPS, to the configured `apiUrl` only |
+| Transport | HTTPS required except for `localhost`; redirects are never followed |
+| Credentials | Never included in `var_dump`, `print_r` or exception messages |
+| Tokens | Stored only in the configured token cache; in memory by default |
+| Local storage | Streams and strings are written to a temporary file for upload and deleted afterwards; files on disk are read in place |
+| Service retention | Clean files are retained briefly and infected files quarantined, according to the Kelpgate plan |
 
-## Compatibility
-
-PHP 7.4, 8.0, 8.1, 8.2, 8.3 and 8.4, with `ext-curl` (for the default transport) and `ext-json`. The test suite runs on every one of those versions.
-
-## Verify your setup
-
-Download the standard EICAR test file from [eicar.org](https://www.eicar.org/download-anti-malware-testfile/). It is a harmless file that every scanner treats as a virus.
-
-```php
-$result = KelpgateClient::fromEnv()->scanFile('eicar.com');
-var_dump($result->infected, $result->signature);   // true, "Eicar-Signature" or similar
-```
-
-Then scan any ordinary file and confirm `infected` is `false`. `KelpgateClient::fromEnv()->health()->ok` checks that the service is reachable without any credentials.
+Report vulnerabilities according to the [security policy](https://github.com/KelpGate/.github/blob/main/SECURITY.md).
 
 ## Troubleshooting
 
-| Symptom | Likely cause |
-| --- | --- |
-| `ConfigException`: must use https | `apiUrl` or `tokenUrl` is not HTTPS. Plain HTTP works only for `localhost`. |
-| `ConfigException`: ext-curl is not available | Install `ext-curl`, or pass your own `transport`. |
-| `AuthException` with code `TOKEN_REQUEST_FAILED` | The client ID or secret is wrong, or the API client does not have the `scan` scope. |
-| `AuthException` with status 403 | The organization is suspended, or the API client is not linked to an organization. |
-| `QuotaExceededException` | The plan's scan quota is used up. The exception carries an upgrade URL. |
-| `RateLimitedException`, or slow scans under load | Too many scans at once. The client retries and honors `Retry-After`; lower your concurrency. |
-| `PayloadTooLargeException` | The file is over the plan limit or the client's `maxBytes`. |
-| `TimeoutException` on large files | Raise `timeout`, or use `scanFileAsync` and `waitForResult`. |
-| A new token request on every web request | Pass a persistent `tokenCache`. |
-| Clean results with `degraded` set | An engine did not finish for that scan. The result is still valid; coverage was reduced. |
+Verify an installation with the [EICAR test file](https://www.eicar.org/download-anti-malware-testfile/), which every scanner reports as infected:
 
-## Support and versioning
+```php
+$result = KelpgateClient::fromEnv()->scanFile('eicar.com');
+var_dump($result->infected);   // bool(true)
+```
 
-This project follows [Semantic Versioning](https://semver.org): breaking changes only in major versions, new features in minor versions, fixes in patch versions. Releases are tagged on GitHub, and user-visible changes are listed in the [changelog](CHANGELOG.md).
+| Symptom | Cause |
+|---|---|
+| `ConfigException: ... must use https` | `apiUrl` or `tokenUrl` is not HTTPS |
+| `ConfigException: ext-curl is not available` | Install `ext-curl`, or supply a `transport` |
+| `AuthException` with code `TOKEN_REQUEST_FAILED` | Invalid client ID or secret, or the client lacks the `scan` scope |
+| `AuthException` with status 403 | Organization suspended, or client not linked to an organization |
+| `RateLimitedException` | Too many concurrent scans; the client honours `Retry-After`. Reduce concurrency. |
+| `TimeoutException` on large files | Increase `timeout`, or use `scanFileAsync` with `waitForResult` |
+| A token request on every web request | Supply a persistent `tokenCache` |
+| `degraded` is `true` | An engine did not complete for that scan |
 
-Fixes, including security fixes, go into the latest release only, so upgrade to receive them. The tested runtime versions are listed under Compatibility. The client talks to version 1 of the Kelpgate API (`/api/v1`).
+## Compatibility and versioning
 
-For help, see [getting help](https://github.com/KelpGate/.github/blob/main/SUPPORT.md) or email support@kelpgate.cloud.
+| Component | Supported |
+|---|---|
+| PHP | 7.4, 8.0, 8.1, 8.2, 8.3, 8.4 (tested in CI) |
+| Extensions | `ext-json`; `ext-curl` for the default transport |
+| Kelpgate API | Version 1 (`/api/v1`) |
 
-## Contributing and security
+The package follows [Semantic Versioning](https://semver.org); fixes, including security fixes, are released for the latest version only. Changes are listed in the [changelog](CHANGELOG.md). The organisation-wide policy is in [versioning and releases](https://github.com/KelpGate/.github/blob/main/docs/versioning-and-releases.md).
 
-Bug reports and pull requests are welcome; see the [contributing guide](https://github.com/KelpGate/.github/blob/main/CONTRIBUTING.md). To report a vulnerability, email security@kelpgate.cloud or follow the [security policy](https://github.com/KelpGate/.github/blob/main/SECURITY.md). For help, see [getting help](https://github.com/KelpGate/.github/blob/main/SUPPORT.md).
+## Development
 
 ```bash
 composer install
-composer check    # phpcs, phpstan and phpunit
+composer check    # PHP_CodeSniffer, PHPStan and PHPUnit
 ```
 
-## License
+Contributions follow the [contributing guide](https://github.com/KelpGate/.github/blob/main/CONTRIBUTING.md).
 
-MIT. See [LICENSE](LICENSE). You can use this package in open-source and proprietary software alike. The Kelpgate scanning service it connects to is a hosted commercial product with its own terms.
+## Support
+
+See [getting help](https://github.com/KelpGate/.github/blob/main/SUPPORT.md) or contact support@kelpgate.cloud.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE). The Kelpgate scanning service is subject to its own terms.
