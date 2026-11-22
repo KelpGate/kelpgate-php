@@ -143,7 +143,7 @@ All exceptions extend `Kelpgate\Exception\KelpgateException` and expose `getStat
 |---|---|
 | `ConfigException` | Invalid options or idempotency key; thrown before any request |
 | `AuthException` | Credentials rejected (401), organization or client not permitted (403), or no token available |
-| `QuotaExceededException` | Monthly quota exhausted (402). Exposes `getQuota()` and `getUpgradeUrl()`. |
+| `QuotaExceededException` | Monthly quota exhausted (402). Exposes `getQuota()`, `getUsage()` and `getUpgradeUrl()`. |
 | `PayloadTooLargeException` | File over the plan or scanner limit (413), or over `maxBytes` |
 | `UnsupportedFileException` | File type not permitted, or archive rejected by policy (415) |
 | `RateLimitedException` | Concurrency limit reached (429). Exposes `getRetryAfterSeconds()`. |
